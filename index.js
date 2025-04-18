@@ -15,6 +15,8 @@ const {
 } = require("@discordjs/voice");
 const { REST } = require("@discordjs/rest");
 const https = require("https");
+const { spawn } = require("child_process");
+const ffmpeg = require("ffmpeg-static");
 
 const TOKEN = process.env.TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
@@ -137,8 +139,10 @@ client.on("interactionCreate", async (interaction) => {
       adapterCreator: channel.guild.voiceAdapterCreator,
     });
 
-    const { spawn } = require("child_process");
-    const ffmpeg = require("ffmpeg-static");
+    if (!ffmpeg) {
+      await interaction.editReply("⛔ Δεν βρέθηκε το ffmpeg binary.");
+      return;
+    }
 
     const ffmpegProcess = spawn(ffmpeg, [
       "-i",
@@ -156,9 +160,22 @@ client.on("interactionCreate", async (interaction) => {
       "pipe:1",
     ]);
 
-    const resource = createAudioResource(stationUrl, {
-      inputType: StreamType.Arbitrary, // or StreamType.OggOpus if using ffmpeg stream
+    ffmpegProcess.stderr.on("data", (chunk) => {
+      console.error(`ffmpeg stderr: ${chunk}`);
     });
+
+    ffmpegProcess.on("error", (err) => {
+      console.error("ffmpeg process error:", err);
+      interaction.editReply(
+        "⚠️ Σφάλμα με το ffmpeg. Μήπως δεν υπάρχει υποστήριξη για το stream;"
+      );
+      return;
+    });
+
+    const resource = createAudioResource(ffmpegProcess.stdout, {
+      inputType: StreamType.Raw,
+    });
+
     const player = createAudioPlayer();
 
     player.play(resource);
