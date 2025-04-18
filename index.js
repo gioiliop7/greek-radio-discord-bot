@@ -11,6 +11,7 @@ const {
   createAudioPlayer,
   createAudioResource,
   AudioPlayerStatus,
+  StreamType,
 } = require("@discordjs/voice");
 const { REST } = require("@discordjs/rest");
 const https = require("https");
@@ -131,7 +132,28 @@ client.on("interactionCreate", async (interaction) => {
       adapterCreator: channel.guild.voiceAdapterCreator,
     });
 
-    const resource = createAudioResource(stationUrl);
+    const { spawn } = require("child_process");
+    const ffmpeg = require("ffmpeg-static");
+
+    const ffmpegProcess = spawn(ffmpeg, [
+      "-i",
+      stationUrl,
+      "-analyzeduration",
+      "0",
+      "-loglevel",
+      "0",
+      "-f",
+      "s16le",
+      "-ar",
+      "48000",
+      "-ac",
+      "2",
+      "pipe:1",
+    ]);
+
+    const resource = createAudioResource(stationUrl, {
+      inputType: StreamType.Arbitrary, // or StreamType.OggOpus if using ffmpeg stream
+    });
     const player = createAudioPlayer();
 
     player.play(resource);
