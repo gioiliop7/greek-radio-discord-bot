@@ -13,6 +13,7 @@ const {
   AudioPlayerStatus,
 } = require("@discordjs/voice");
 const { REST } = require("@discordjs/rest");
+const https = require("https");
 
 const TOKEN = process.env.TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
@@ -103,6 +104,9 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     const [stationName, stationUrl] = matchedStation;
+    https.get(stationUrl, (res) => {
+      console.log(`[${stationName}] Stream status: ${res.statusCode}`);
+    });
 
     const channel = interaction.member.voice.channel;
     if (!channel) {
@@ -190,7 +194,7 @@ client.on("voiceStateUpdate", (oldState, newState) => {
   if (!connection) return;
 
   const voiceChannel = oldState.channel;
-  if (!voiceChannel) return; 
+  if (!voiceChannel) return;
 
   const nonBotMembers = voiceChannel.members.filter(
     (member) => !member.user.bot
