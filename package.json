@@ -7,7 +7,6 @@
     "discord.js": "^14.18.0",
     "dotenv": "^16.5.0",
     "ffmpeg": "^0.0.4",
-    "ffmpeg-static": "^5.2.0",
     "nodemon": "^3.1.9"
   },
   "name": "radio-discord-bot",

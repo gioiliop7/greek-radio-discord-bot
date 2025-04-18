@@ -16,7 +16,8 @@ const {
 const { REST } = require("@discordjs/rest");
 const https = require("https");
 const { spawn } = require("child_process");
-const ffmpeg = require("ffmpeg-static");
+
+const ffmpegCommand = "ffmpeg";
 
 const TOKEN = process.env.TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
@@ -139,18 +140,13 @@ client.on("interactionCreate", async (interaction) => {
       adapterCreator: channel.guild.voiceAdapterCreator,
     });
 
-    if (!ffmpeg) {
-      await interaction.editReply("⛔ Δεν βρέθηκε το ffmpeg binary.");
-      return;
-    }
-
-    const ffmpegProcess = spawn(ffmpeg, [
+    const ffmpegArgs = [
       "-i",
       stationUrl,
       "-analyzeduration",
       "0",
       "-loglevel",
-      "0",
+      "warning",
       "-f",
       "s16le",
       "-ar",
@@ -158,18 +154,55 @@ client.on("interactionCreate", async (interaction) => {
       "-ac",
       "2",
       "pipe:1",
-    ]);
+    ];
+
+    const ffmpegProcess = spawn(ffmpegCommand, ffmpegArgs);
 
     ffmpegProcess.stderr.on("data", (chunk) => {
-      console.error(`ffmpeg stderr: ${chunk}`);
+      console.error(`ffmpeg stderr: ${chunk.toString()}`);
     });
 
     ffmpegProcess.on("error", (err) => {
-      console.error("ffmpeg process error:", err);
-      interaction.editReply(
-        "⚠️ Σφάλμα με το ffmpeg. Μήπως δεν υπάρχει υποστήριξη για το stream;"
+      console.error("ffmpeg process failed to start:", err);
+      let errorMessage = "⚠️ Σφάλμα κατά την εκκίνηση του ffmpeg.";
+      if (err.code === "ENOENT") {
+        errorMessage +=
+          " Βεβαιωθείτε ότι το ffmpeg είναι εγκατεστημένο και στο PATH.";
+      } else {
+        errorMessage += ` Σφάλμα: ${err.message}`;
+      }
+      interaction.editReply(errorMessage);
+      const current = connections.get(guildId);
+      if (current && current.connection) {
+        current.connection.destroy();
+        connections.delete(guildId);
+      }
+    });
+
+    ffmpegProcess.on("close", (code, signal) => {
+      console.log(
+        `ffmpeg process closed with code ${code} and signal ${signal}`
       );
-      return;
+      const current = connections.get(guildId);
+      if (
+        current &&
+        current.connection &&
+        current.player &&
+        current.player.state.status !== AudioPlayerStatus.Idle
+      ) {
+        console.log(
+          "FFmpeg closed unexpectedly while player was not idle. Cleaning up."
+        );
+        current.player.stop();
+        current.connection.destroy();
+        connections.delete(guildId);
+      }
+    });
+
+    ffmpegProcess.on("exit", (code, signal) => {
+      console.log(
+        `ffmpeg process exited with code ${code} and signal ${signal}`
+      );
     });
 
     const resource = createAudioResource(ffmpegProcess.stdout, {
@@ -178,19 +211,40 @@ client.on("interactionCreate", async (interaction) => {
 
     const player = createAudioPlayer();
 
-    player.play(resource);
-    connection.subscribe(player);
-
-    connections.set(guildId, { connection, player });
-
     player.on(AudioPlayerStatus.Playing, () => {
       interaction.editReply(`📻 Παίζει τώρα: **${stationName}**`);
     });
 
-    player.on("error", (error) => {
-      console.error(error);
-      interaction.editReply(`⚠️ Σφάλμα: ${error.message}`);
+    player.on(AudioPlayerStatus.Idle, () => {
+      const current = connections.get(guildId);
+      if (current && current.connection) {
+        current.connection.destroy();
+        if (current.ffmpegProcess && !current.ffmpegProcess.killed) {
+          current.ffmpegProcess.kill("SIGKILL");
+        }
+        connections.delete(guildId);
+      }
     });
+
+    player.on("error", (error) => {
+      console.error("Audio player error:", error.message);
+      console.error(error);
+      interaction.editReply(`⚠️ Σφάλμα στο player: ${error.message}`);
+      const current = connections.get(guildId);
+      if (current && current.connection) {
+        current.connection.destroy();
+        if (current.ffmpegProcess && !current.ffmpegProcess.killed) {
+          current.ffmpegProcess.kill("SIGKILL");
+        }
+        connections.delete(guildId);
+      }
+    });
+
+    player.play(resource);
+
+    connection.subscribe(player);
+
+    connections.set(guildId, { connection, player, ffmpegProcess });
   }
 
   // ===== STOP RADIO =====
@@ -207,6 +261,9 @@ client.on("interactionCreate", async (interaction) => {
 
     existing.player.stop();
     existing.connection.destroy();
+    if (existing.ffmpegProcess && !existing.ffmpegProcess.killed) {
+      existing.ffmpegProcess.kill("SIGKILL");
+    }
     connections.delete(guildId);
 
     await interaction.reply(`🛑 Το ραδιόφωνο σταμάτησε.`);
@@ -234,24 +291,38 @@ client.on("ready", async () => {
 });
 
 client.on("voiceStateUpdate", (oldState, newState) => {
-  const connection = connections.get(oldState.guild.id);
-  if (!connection) return;
+  if (!oldState.channelId || newState.channelId) return;
+
+  const connectionEntry = connections.get(oldState.guild.id);
+  if (!connectionEntry) return;
+
+  if (connectionEntry.connection.joinConfig.channelId !== oldState.channelId)
+    return;
 
   const voiceChannel = oldState.channel;
   if (!voiceChannel) return;
 
-  const nonBotMembers = voiceChannel.members.filter(
-    (member) => !member.user.bot
-  );
-  if (nonBotMembers.size > 0) return;
+  voiceChannel.members
+    .fetch()
+    .then((members) => {
+      const nonBotMembers = members.filter((member) => !member.user.bot);
 
-  connection.player.stop();
-  connection.connection.destroy();
-  connections.delete(oldState.guild.id);
-
-  console.log(
-    `👋 Το bot αποσυνδέθηκε γιατί όλοι έφυγαν από το voice κανάλι (${voiceChannel.name})`
-  );
+      if (nonBotMembers.size === 0) {
+        console.log(
+          `👋 Disconnecting from ${voiceChannel.name} as no humans remain.`
+        );
+        connectionEntry.player.stop();
+        connectionEntry.connection.destroy();
+        if (
+          connectionEntry.ffmpegProcess &&
+          !connectionEntry.ffmpegProcess.killed
+        ) {
+          connectionEntry.ffmpegProcess.kill("SIGKILL");
+        }
+        connections.delete(oldState.guild.id);
+      }
+    })
+    .catch(console.error);
 });
 
 client.login(TOKEN);
