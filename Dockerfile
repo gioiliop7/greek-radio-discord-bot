@@ -1,4 +1,4 @@
-FROM node:18-slim
+FROM arm64v8/node:18-slim
 
 WORKDIR /app
 
