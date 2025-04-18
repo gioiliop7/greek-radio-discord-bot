@@ -1,13 +1,12 @@
-FROM arm32v7/node:18
+FROM node:22
 
 WORKDIR /app
 
-# Install dependencies
+
+RUN apt-get update && apt-get install -y ffmpeg --no-install-recommends && rm -rf /var/lib/apt/lists/*
+
 COPY package*.json ./
 RUN npm install
-
-# # Optional: install curl/wget for debugging
-# RUN apt-get update && apt-get install -y curl
 
 # Copy app code
 COPY . .
