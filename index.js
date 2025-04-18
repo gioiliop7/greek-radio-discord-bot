@@ -118,7 +118,12 @@ client.on("interactionCreate", async (interaction) => {
       return;
     }
 
-    await interaction.deferReply();
+    try {
+      await interaction.deferReply();
+    } catch (err) {
+      console.warn("⚠️ Could not defer reply:", err);
+      return; // error there
+    }
 
     const existing = connections.get(guildId);
     if (existing) {
