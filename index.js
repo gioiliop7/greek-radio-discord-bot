@@ -20,8 +20,12 @@ const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const axios = require("axios");
+const os = require("os");
 
-const ffmpegCommand = "ffmpeg";
+const isWindows = os.platform() === "win32";
+const ffmpegCommand = isWindows
+  ? path.join(process.cwd(), "ffmpeg.exe")
+  : "ffmpeg";
 
 const TOKEN = process.env.TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
@@ -508,27 +512,25 @@ client.on("voiceStateUpdate", (oldState, newState) => {
   const voiceChannel = oldState.channel;
   if (!voiceChannel) return;
 
-  voiceChannel.members
-    .fetch()
-    .then((members) => {
-      const nonBotMembers = members.filter((member) => !member.user.bot);
+  // Check if there are any non-bot members left in the channel
+  const nonBotMembers = voiceChannel.members.filter(
+    (member) => !member.user.bot
+  );
 
-      if (nonBotMembers.size === 0) {
-        console.log(
-          `👋 Disconnecting from ${voiceChannel.name} as no humans remain.`
-        );
-        connectionEntry.player.stop();
-        connectionEntry.connection.destroy();
-        if (
-          connectionEntry.ffmpegProcess &&
-          !connectionEntry.ffmpegProcess.killed
-        ) {
-          connectionEntry.ffmpegProcess.kill("SIGKILL");
-        }
-        connections.delete(oldState.guild.id);
-      }
-    })
-    .catch(console.error);
+  if (nonBotMembers.size === 0) {
+    console.log(
+      `👋 Disconnecting from ${voiceChannel.name} as no humans remain.`
+    );
+    connectionEntry.player.stop();
+    connectionEntry.connection.destroy();
+    if (
+      connectionEntry.ffmpegProcess &&
+      !connectionEntry.ffmpegProcess.killed
+    ) {
+      connectionEntry.ffmpegProcess.kill("SIGKILL");
+    }
+    connections.delete(oldState.guild.id);
+  }
 });
 
 client.login(TOKEN);
