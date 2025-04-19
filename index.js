@@ -5,6 +5,7 @@ const {
   GatewayIntentBits,
   SlashCommandBuilder,
   Routes,
+  EmbedBuilder,
 } = require("discord.js");
 const {
   joinVoiceChannel,
@@ -16,12 +17,15 @@ const {
 const { REST } = require("@discordjs/rest");
 const https = require("https");
 const { spawn } = require("child_process");
+const fs = require("fs");
+const path = require("path");
+const axios = require("axios");
 
 const ffmpegCommand = "ffmpeg";
 
 const TOKEN = process.env.TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
-
+const AUDD_API_KEY = process.env.AUDD_API_KEY;
 const stations = {
   "Sfera FM": "https://sfera.live24.gr/sfera4132",
   "Rythmos 94.9": "https://rythmos.live24.gr/rythmos",
@@ -76,6 +80,10 @@ client.once("ready", async () => {
     new SlashCommandBuilder()
       .setName("list-stations")
       .setDescription("Δείξε τη λίστα με τους διαθέσιμους σταθμούς"),
+
+    new SlashCommandBuilder()
+      .setName("identify-song")
+      .setDescription("Αναγνώριση του τραγουδιού που παίζει τώρα"),
   ].map((cmd) => cmd.toJSON());
 
   const rest = new REST({ version: "10" }).setToken(TOKEN);
@@ -244,7 +252,12 @@ client.on("interactionCreate", async (interaction) => {
 
     connection.subscribe(player);
 
-    connections.set(guildId, { connection, player, ffmpegProcess });
+    connections.set(guildId, {
+      connection,
+      player,
+      ffmpegProcess,
+      currentStation: stationName,
+    });
   }
 
   // ===== STOP RADIO =====
@@ -279,6 +292,199 @@ client.on("interactionCreate", async (interaction) => {
       content: `📻 **Διαθέσιμοι Σταθμοί:**\n\n${list}`,
       ephemeral: true,
     });
+  }
+
+  // ===== IDENTIFY SONG =====
+  else if (interaction.commandName === "identify-song") {
+    const existing = connections.get(guildId);
+
+    if (!existing) {
+      await interaction.reply({
+        content: `⛔ Δεν παίζει κάτι αυτή τη στιγμή. Ξεκίνησε πρώτα ένα ραδιοφωνικό σταθμό.`,
+        ephemeral: true,
+      });
+      return;
+    }
+
+    await interaction.deferReply();
+
+    try {
+      console.log("Starting song identification process");
+      const stationName = existing.currentStation;
+      const stationUrl = stations[stationName];
+      console.log(
+        `Identifying song from station: ${stationName}, URL: ${stationUrl}`
+      );
+
+      if (!stationUrl) {
+        console.error("Station URL not found for:", stationName);
+        await interaction.editReply(
+          "⚠️ Δεν ήταν δυνατή η αναγνώριση του σταθμού."
+        );
+        return;
+      }
+
+      const tempDir = path.join(__dirname, "temp");
+      if (!fs.existsSync(tempDir)) {
+        fs.mkdirSync(tempDir);
+        console.log(`Created temp directory: ${tempDir}`);
+      }
+
+      const samplePath = path.join(tempDir, `sample_${Date.now()}.mp3`);
+      console.log(`Sample will be saved to: ${samplePath}`);
+
+      await interaction.editReply(
+        "🎵 Ακούω το τραγούδι... Παρακαλώ περιμένετε."
+      );
+
+      console.log("Starting FFmpeg recording process");
+      const recordProcess = spawn(ffmpegCommand, [
+        "-i",
+        stationUrl,
+        "-t",
+        "10", // 10 seconds recording
+        "-y", // Overwrite output file
+        "-q:a",
+        "0", // Best audio quality
+        "-map",
+        "a", // Only audio stream
+        samplePath,
+      ]);
+
+      recordProcess.stderr.on("data", (chunk) => {
+        console.log(`FFmpeg stderr: ${chunk.toString()}`);
+      });
+
+      recordProcess.on("close", async (code) => {
+        console.log(`FFmpeg recording process closed with code: ${code}`);
+
+        if (code !== 0) {
+          console.error(`FFmpeg recording failed with code: ${code}`);
+          await interaction.editReply(
+            "⚠️ Σφάλμα κατά την δημιουργία δείγματος ήχου."
+          );
+          return;
+        }
+
+        try {
+          if (fs.existsSync(samplePath)) {
+            const stats = fs.statSync(samplePath);
+            console.log(`Sample file size: ${stats.size} bytes`);
+            if (stats.size === 0) {
+              console.error("Sample file is empty");
+              await interaction.editReply(
+                "⚠️ Το δείγμα ήχου είναι κενό. Προσπαθήστε ξανά."
+              );
+              fs.unlinkSync(samplePath);
+              return;
+            }
+          } else {
+            console.error("Sample file was not created");
+            await interaction.editReply(
+              "⚠️ Δεν δημιουργήθηκε αρχείο ήχου. Προσπαθήστε ξανά."
+            );
+            return;
+          }
+
+          await interaction.editReply("🔍 Αναζήτηση τραγουδιού...");
+
+          const FormData = require("form-data");
+          const formData = new FormData();
+          formData.append("api_token", AUDD_API_KEY);
+          formData.append("file", fs.createReadStream(samplePath));
+
+          console.log("Sending request to AudD API");
+
+          const response = await axios.post("https://api.audd.io/", formData, {
+            headers: formData.getHeaders(),
+            maxContentLength: Infinity,
+            maxBodyLength: Infinity,
+          });
+
+          console.log(
+            "Response received from AudD API:",
+            JSON.stringify(response.data).substring(0, 200) + "..."
+          );
+
+          fs.unlinkSync(samplePath);
+          console.log("Temporary file deleted");
+
+          if (response.data && response.data.result) {
+            const result = response.data.result;
+            console.log(`Song identified: ${result.title} by ${result.artist}`);
+
+            const embed = new EmbedBuilder()
+              .setColor(0x3498db)
+              .setTitle(`🎵 ${result.title}`)
+              .setDescription(`Από ${result.artist}`)
+              .addFields(
+                {
+                  name: "Άλμπουμ",
+                  value: result.album || "Άγνωστο",
+                  inline: true,
+                },
+                {
+                  name: "Έτος",
+                  value: result.release_date || "Άγνωστο",
+                  inline: true,
+                },
+                { name: "Σταθμός", value: stationName, inline: true }
+              );
+
+            if (result.song_link) {
+              embed.setURL(result.song_link);
+            }
+
+            if (
+              result.apple_music &&
+              result.apple_music.artwork &&
+              result.apple_music.artwork.url
+            ) {
+              embed.setThumbnail(
+                result.apple_music.artwork.url
+                  .replace("{w}", "500")
+                  .replace("{h}", "500")
+              );
+            }
+
+            await interaction.editReply({
+              content: "✅ Βρέθηκε τραγούδι!",
+              embeds: [embed],
+            });
+          } else {
+            console.log("No song identified in the response:", response.data);
+            await interaction.editReply(
+              "❓ Συγγνώμη, δεν μπόρεσα να αναγνωρίσω το τραγούδι. Προσπαθήστε ξανά αργότερα."
+            );
+          }
+        } catch (error) {
+          console.error("Error identifying song:", error);
+          if (error.response) {
+            console.error("API error response:", error.response.data);
+          }
+          await interaction.editReply(
+            "⚠️ Σφάλμα κατά την αναγνώριση τραγουδιού: " + error.message
+          );
+
+          if (fs.existsSync(samplePath)) {
+            fs.unlinkSync(samplePath);
+            console.log("Cleaned up temporary file after error");
+          }
+        }
+      });
+
+      recordProcess.on("error", async (err) => {
+        console.error("Error spawning FFmpeg process:", err);
+        await interaction.editReply(
+          "⚠️ Σφάλμα κατά την εγγραφή δείγματος ήχου: " + err.message
+        );
+      });
+    } catch (error) {
+      console.error("Error in identify-song command:", error);
+      await interaction.editReply(
+        "⚠️ Σφάλμα κατά την αναγνώριση τραγουδιού: " + error.message
+      );
+    }
   }
 });
 
