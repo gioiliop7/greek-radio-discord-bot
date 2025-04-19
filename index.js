@@ -120,9 +120,6 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     const [stationName, stationUrl] = matchedStation;
-    https.get(stationUrl, (res) => {
-      console.log(`[${stationName}] Stream status: ${res.statusCode}`);
-    });
 
     const channel = interaction.member.voice.channel;
     if (!channel) {
