@@ -27,7 +27,7 @@ const stations = {
   "Rythmos 94.9": "https://rythmos.live24.gr/rythmos",
   "Athens DeeJay 95.2": "https://netradio.live24.gr/athensdeejay",
   "Kiss FM 92.9": "https://kissfm.live24.gr/kissfmathens",
-  "Dromos FM 89.8": "http://netradio.live24.gr/dromos2",
+  "Dromos FM 89.8": "https://stream.rcs.revma.com/10q3enqxbfhvv",
   "MAD Radio 106.2": "http://mediaserver.mad.tv/stream",
   "Radio ELGreko": "https://s3.free-shoutcast.com/stream/18192",
   "ERA Sport": "https://radiostreaming.ert.gr/ert-erasport",
