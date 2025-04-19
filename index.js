@@ -498,35 +498,36 @@ client.on("ready", async () => {
 });
 
 client.on("voiceStateUpdate", (oldState, newState) => {
-  if (!oldState.channelId || newState.channelId) return;
-
+  // Only handle events for channels where we have a connection
   const connectionEntry = connections.get(oldState.guild.id);
   if (!connectionEntry) return;
 
-  if (connectionEntry.connection.joinConfig.channelId !== oldState.channelId)
-    return;
+  const botChannelId = connectionEntry.connection.joinConfig.channelId;
 
-  const voiceChannel = oldState.channel;
-  if (!voiceChannel) return;
+  // If user left or moved from the bot's channel
+  if (oldState.channelId === botChannelId) {
+    const voiceChannel = oldState.channel;
+    if (!voiceChannel) return;
 
-  // Check if there are any non-bot members left in the channel
-  const nonBotMembers = voiceChannel.members.filter(
-    (member) => !member.user.bot
-  );
-
-  if (nonBotMembers.size === 0) {
-    console.log(
-      `👋 Disconnecting from ${voiceChannel.name} as no humans remain.`
+    // Check if there are any non-bot members left in the channel
+    const nonBotMembers = voiceChannel.members.filter(
+      (member) => !member.user.bot
     );
-    connectionEntry.player.stop();
-    connectionEntry.connection.destroy();
-    if (
-      connectionEntry.ffmpegProcess &&
-      !connectionEntry.ffmpegProcess.killed
-    ) {
-      connectionEntry.ffmpegProcess.kill("SIGKILL");
+
+    if (nonBotMembers.size === 0) {
+      console.log(
+        `👋 Disconnecting from ${voiceChannel.name} as no humans remain.`
+      );
+      connectionEntry.player.stop();
+      connectionEntry.connection.destroy();
+      if (
+        connectionEntry.ffmpegProcess &&
+        !connectionEntry.ffmpegProcess.killed
+      ) {
+        connectionEntry.ffmpegProcess.kill("SIGKILL");
+      }
+      connections.delete(oldState.guild.id);
     }
-    connections.delete(oldState.guild.id);
   }
 });
 
